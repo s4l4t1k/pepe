@@ -280,46 +280,41 @@ async def analyze_screenshot(
 ) -> AnalysisResult:
     """
     Two-step analysis:
-    - Step 1: Claude (vision) extracts poker data from the image
+    - Step 1: Together.ai Llama Vision extracts poker data from the image
     - Step 2: DeepSeek analyzes the extracted text data
     """
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    together_key = os.getenv("TOGETHER_API_KEY")
     deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
-    if not anthropic_key:
+    if not together_key:
         return _error_result(
-            "Для анализа скриншотов нужен Anthropic API ключ (распознавание изображений). "
-            "Опишите раздачу текстом через /analyze."
+            "Для анализа скриншотов нужен Together.ai API ключ. "
+            "Опишите раздачу текстом."
         )
     if not deepseek_key:
         return _error_result("API ключ DeepSeek не настроен")
 
-    import anthropic as _anthropic
-    claude = _anthropic.AsyncAnthropic(api_key=anthropic_key)
+    vision_client = AsyncOpenAI(api_key=together_key, base_url="https://api.together.xyz/v1")
     ds_client = _get_client()
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     async def _call(attempt):
-        # Step 1: extract with Claude vision (cheap — 1024 tokens max)
-        extract_response = await claude.messages.create(
-            model="claude-haiku-4-5-20251001",
+        # Step 1: extract with Together.ai vision model
+        extract_response = await vision_client.chat.completions.create(
+            model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
             max_tokens=1024,
             messages=[{
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": image_b64,
-                        },
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
                     },
                     {"type": "text", "text": SCREENSHOT_EXTRACT_PROMPT},
                 ],
             }],
         )
-        extracted_raw = next((b.text for b in extract_response.content if b.type == "text"), "{}")
+        extracted_raw = extract_response.choices[0].message.content or "{}"
         extracted = _parse_json_response(extracted_raw)
 
         screen_desc = (
