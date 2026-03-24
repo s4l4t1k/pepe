@@ -283,25 +283,25 @@ async def analyze_screenshot(
     - Step 1: Together.ai Llama Vision extracts poker data from the image
     - Step 2: DeepSeek analyzes the extracted text data
     """
-    together_key = os.getenv("TOGETHER_API_KEY")
+    groq_key = os.getenv("GROQ_API_KEY")
     deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
-    if not together_key:
+    if not groq_key:
         return _error_result(
-            "Для анализа скриншотов нужен Together.ai API ключ. "
+            "Для анализа скриншотов нужен Groq API ключ. "
             "Опишите раздачу текстом."
         )
     if not deepseek_key:
         return _error_result("API ключ DeepSeek не настроен")
 
-    vision_client = AsyncOpenAI(api_key=together_key, base_url="https://api.together.xyz/v1")
+    vision_client = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
     ds_client = _get_client()
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     async def _call(attempt):
-        # Step 1: extract with Together.ai vision model
+        # Step 1: extract with Groq vision model (Llama 3.2 Vision)
         extract_response = await vision_client.chat.completions.create(
-            model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             max_tokens=1024,
             messages=[{
                 "role": "user",
