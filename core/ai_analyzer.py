@@ -8,6 +8,7 @@ import logging
 import os
 from typing import Optional, List, Dict
 
+import httpx
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
@@ -294,10 +295,13 @@ async def analyze_screenshot(
     if not deepseek_key:
         return _error_result("API ключ DeepSeek не настроен")
 
-    # Gemini via OpenAI-compatible endpoint
+    # Gemini via OpenAI-compatible endpoint (route through proxy if set)
+    _proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+    _http_client = httpx.AsyncClient(proxy=_proxy) if _proxy else None
     vision_client = AsyncOpenAI(
         api_key=gemini_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        http_client=_http_client,
     )
     ds_client = _get_client()
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
