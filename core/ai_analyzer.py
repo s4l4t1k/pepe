@@ -299,7 +299,7 @@ async def analyze_screenshot(
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     async def _call(attempt):
-        # Step 1: extract with Groq vision model (Llama 3.2 Vision)
+        # Step 1: extract with Groq Llama 4 Scout vision
         extract_response = await vision_client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             max_tokens=1024,
