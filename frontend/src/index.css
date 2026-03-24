@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-poker-bg text-poker-text font-sans;
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-poker-card;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-poker-accent rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-poker-primary;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-poker-primary hover:bg-poker-primary-dark text-poker-bg font-semibold px-6 py-3 rounded-lg transition-all duration-200 active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply bg-poker-secondary hover:bg-poker-accent text-poker-text font-medium px-6 py-3 rounded-lg border border-poker-border transition-all duration-200;
+  }
+
+  .btn-ghost {
+    @apply text-poker-text-muted hover:text-poker-text hover:bg-poker-secondary px-4 py-2 rounded-lg transition-all duration-200;
+  }
+
+  .card {
+    @apply bg-poker-card border border-poker-border rounded-xl p-6;
+  }
+
+  .input-field {
+    @apply bg-poker-secondary border border-poker-border rounded-lg px-4 py-3 text-poker-text placeholder-poker-text-muted focus:outline-none focus:border-poker-primary transition-colors w-full;
+  }
+
+  .badge-score-good {
+    @apply bg-poker-success/20 text-poker-success border border-poker-success/30 px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .badge-score-ok {
+    @apply bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .badge-score-bad {
+    @apply bg-poker-danger/20 text-red-400 border border-poker-danger/30 px-3 py-1 rounded-full text-sm font-medium;
+  }
+}
