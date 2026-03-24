@@ -283,25 +283,29 @@ async def analyze_screenshot(
     - Step 1: Together.ai Llama Vision extracts poker data from the image
     - Step 2: DeepSeek analyzes the extracted text data
     """
-    groq_key = os.getenv("GROQ_API_KEY")
+    gemini_key = os.getenv("GEMINI_API_KEY")
     deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
-    if not groq_key:
+    if not gemini_key:
         return _error_result(
-            "Для анализа скриншотов нужен Groq API ключ. "
+            "Для анализа скриншотов нужен Google Gemini API ключ. "
             "Опишите раздачу текстом."
         )
     if not deepseek_key:
         return _error_result("API ключ DeepSeek не настроен")
 
-    vision_client = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
+    # Gemini via OpenAI-compatible endpoint
+    vision_client = AsyncOpenAI(
+        api_key=gemini_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
     ds_client = _get_client()
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     async def _call(attempt):
-        # Step 1: extract with Groq Llama 4 Scout vision
+        # Step 1: extract with Gemini Flash vision (free, no Russian IP block)
         extract_response = await vision_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="gemini-2.0-flash",
             max_tokens=1024,
             messages=[{
                 "role": "user",
