@@ -9,6 +9,7 @@ import Training from './pages/Training'
 import Assistant from './pages/Assistant'
 import History from './pages/History'
 import Profile from './pages/Profile'
+import Opponents from './pages/Opponents'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -70,6 +71,7 @@ export default function App() {
             <Route path="training" element={<Training />} />
             <Route path="assistant" element={<Assistant />} />
             <Route path="history" element={<History />} />
+            <Route path="opponents" element={<Opponents />} />
             <Route path="profile" element={<Profile />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

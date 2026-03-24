@@ -242,10 +242,13 @@ export default function Analyze() {
                 className="input-field h-56 resize-none font-mono text-sm"
                 disabled={loading}
               />
+              <p className="text-xs text-poker-text-muted mt-2">
+                Поддерживаются: PokerStars hand history, GGPoker, или свободное описание с картами и действиями. Для вопросов без конкретной раздачи — используй <strong>AI Тренер</strong>.
+              </p>
               <button
                 onClick={handleAnalyzeText}
                 disabled={loading || !handText.trim()}
-                className="btn-primary w-full mt-4 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="btn-primary w-full mt-3 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <>

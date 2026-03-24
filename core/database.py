@@ -59,6 +59,8 @@ class WebUser(Base):
                              foreign_keys="Hand.web_user_id")
     web_training_progress = relationship("TrainingProgress", back_populates="web_user", lazy="select",
                                          foreign_keys="TrainingProgress.web_user_id")
+    opponents = relationship("Opponent", back_populates="web_user", lazy="select",
+                             foreign_keys="Opponent.web_user_id")
 
 
 class Hand(Base):
@@ -74,6 +76,21 @@ class Hand(Base):
 
     user = relationship("User", back_populates="hands", foreign_keys=[user_id])
     web_user = relationship("WebUser", back_populates="web_hands", foreign_keys=[web_user_id])
+
+
+class Opponent(Base):
+    __tablename__ = "opponents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    web_user_id = Column(Integer, ForeignKey("web_users.id"), nullable=False, index=True)
+    nickname = Column(String(100), nullable=False)
+    notes = Column(Text, nullable=True)       # JSON array of hand note strings
+    analysis = Column(Text, nullable=True)    # JSON with AI analysis
+    hands_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    web_user = relationship("WebUser", back_populates="opponents", foreign_keys=[web_user_id])
 
 
 class TrainingProgress(Base):
@@ -452,3 +469,98 @@ async def mark_web_lesson_complete(
     await session.commit()
     await session.refresh(progress)
     return progress
+
+
+# ── Opponent Repository helpers ───────────────────────────────────────────────
+
+async def create_opponent(
+    session: AsyncSession,
+    web_user_id: int,
+    nickname: str,
+) -> Opponent:
+    import json as _json
+    opponent = Opponent(
+        web_user_id=web_user_id,
+        nickname=nickname,
+        notes=_json.dumps([]),
+        hands_count=0,
+    )
+    session.add(opponent)
+    await session.commit()
+    await session.refresh(opponent)
+    return opponent
+
+
+async def get_opponents(
+    session: AsyncSession,
+    web_user_id: int,
+) -> List[Opponent]:
+    result = await session.execute(
+        select(Opponent)
+        .where(Opponent.web_user_id == web_user_id)
+        .order_by(desc(Opponent.updated_at))
+    )
+    return list(result.scalars().all())
+
+
+async def get_opponent_by_id(
+    session: AsyncSession,
+    opponent_id: int,
+    web_user_id: int,
+) -> Optional[Opponent]:
+    result = await session.execute(
+        select(Opponent).where(
+            Opponent.id == opponent_id,
+            Opponent.web_user_id == web_user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def add_opponent_note(
+    session: AsyncSession,
+    opponent_id: int,
+    web_user_id: int,
+    note: str,
+) -> Optional[Opponent]:
+    import json as _json
+    opponent = await get_opponent_by_id(session, opponent_id, web_user_id)
+    if not opponent:
+        return None
+    notes = _json.loads(opponent.notes or "[]")
+    notes.append(note)
+    opponent.notes = _json.dumps(notes, ensure_ascii=False)
+    opponent.hands_count = len(notes)
+    opponent.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(opponent)
+    return opponent
+
+
+async def update_opponent_analysis(
+    session: AsyncSession,
+    opponent_id: int,
+    web_user_id: int,
+    analysis_json: str,
+) -> Optional[Opponent]:
+    opponent = await get_opponent_by_id(session, opponent_id, web_user_id)
+    if not opponent:
+        return None
+    opponent.analysis = analysis_json
+    opponent.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(opponent)
+    return opponent
+
+
+async def delete_opponent(
+    session: AsyncSession,
+    opponent_id: int,
+    web_user_id: int,
+) -> bool:
+    opponent = await get_opponent_by_id(session, opponent_id, web_user_id)
+    if not opponent:
+        return False
+    await session.delete(opponent)
+    await session.commit()
+    return True

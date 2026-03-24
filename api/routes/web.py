@@ -3,6 +3,7 @@ Web app feature endpoints — all require JWT auth.
 """
 import json
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -16,9 +17,15 @@ from core.database import (
     get_web_completed_lessons,
     mark_web_lesson_complete,
     get_web_user_stats,
+    create_opponent,
+    get_opponents,
+    get_opponent_by_id,
+    add_opponent_note,
+    update_opponent_analysis,
+    delete_opponent,
 )
 from core.parser import parse_hand
-from core.ai_analyzer import analyze_hand, analyze_screenshot, ask_assistant, generate_lesson
+from core.ai_analyzer import analyze_hand, analyze_screenshot, ask_assistant, generate_lesson, analyze_opponent
 from api.routes.auth import get_current_web_user
 from bot.keyboards import MODULES, LESSONS, LESSON_TOPICS
 
@@ -97,6 +104,17 @@ async def analyze_hand_endpoint(
         raise HTTPException(status_code=400, detail="hand_text не может быть пустым")
 
     parsed = parse_hand(req.hand_text)
+
+    # Validate: check if text looks like a poker hand
+    has_hand_data = bool(parsed.actions or parsed.hero_cards)
+    if not has_hand_data:
+        poker_pattern = r'(flop|turn|river|raise|call|fold|check|btn|co|\bbb\b|\bsb\b|utg|покер|раздач|рейз|фолд|колл|чек|флоп|тёрн|ривер|позиц|ставк|pokerstars)'
+        if not re.search(poker_pattern, req.hand_text, re.IGNORECASE):
+            raise HTTPException(
+                status_code=422,
+                detail="Текст не похож на покерную раздачу. Вставьте историю рук из покерного клиента или опишите раздачу с картами и действиями. Для вопросов об игре используйте раздел 'AI Тренер'."
+            )
+
     analysis = await analyze_hand(parsed)
 
     hand_record = await save_web_hand(
@@ -258,6 +276,134 @@ async def get_history(
         ))
 
     return result
+
+
+# ── Opponent endpoints ────────────────────────────────────────────────────────
+
+class CreateOpponentRequest(BaseModel):
+    nickname: str
+
+
+class AddNoteRequest(BaseModel):
+    note: str
+
+
+class OpponentOut(BaseModel):
+    id: int
+    nickname: str
+    notes: List[str]
+    analysis: Optional[dict]
+    hands_count: int
+    created_at: str
+    updated_at: str
+
+
+def _opponent_to_out(opp) -> OpponentOut:
+    notes = json.loads(opp.notes or "[]")
+    analysis = None
+    if opp.analysis:
+        try:
+            analysis = json.loads(opp.analysis)
+        except Exception:
+            pass
+    return OpponentOut(
+        id=opp.id,
+        nickname=opp.nickname,
+        notes=notes,
+        analysis=analysis,
+        hands_count=opp.hands_count,
+        created_at=opp.created_at.isoformat(),
+        updated_at=opp.updated_at.isoformat(),
+    )
+
+
+@router.post("/opponents", response_model=OpponentOut)
+async def create_opponent_endpoint(
+    req: CreateOpponentRequest,
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create a new opponent profile."""
+    nickname = req.nickname.strip()
+    if not nickname:
+        raise HTTPException(status_code=400, detail="Никнейм не может быть пустым")
+    opp = await create_opponent(session, current_user.id, nickname)
+    return _opponent_to_out(opp)
+
+
+@router.get("/opponents", response_model=List[OpponentOut])
+async def list_opponents(
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """List all opponent profiles for the current user."""
+    opps = await get_opponents(session, current_user.id)
+    return [_opponent_to_out(o) for o in opps]
+
+
+@router.get("/opponents/{opponent_id}", response_model=OpponentOut)
+async def get_opponent(
+    opponent_id: int,
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    opp = await get_opponent_by_id(session, opponent_id, current_user.id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Оппонент не найден")
+    return _opponent_to_out(opp)
+
+
+@router.post("/opponents/{opponent_id}/note", response_model=OpponentOut)
+async def add_note_endpoint(
+    opponent_id: int,
+    req: AddNoteRequest,
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Add a hand note about this opponent."""
+    note = req.note.strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Заметка не может быть пустой")
+    opp = await add_opponent_note(session, opponent_id, current_user.id, note)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Оппонент не найден")
+    return _opponent_to_out(opp)
+
+
+@router.post("/opponents/{opponent_id}/analyze", response_model=OpponentOut)
+async def analyze_opponent_endpoint(
+    opponent_id: int,
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Run AI analysis on this opponent's notes."""
+    opp = await get_opponent_by_id(session, opponent_id, current_user.id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Оппонент не найден")
+
+    notes = json.loads(opp.notes or "[]")
+    if not notes:
+        raise HTTPException(status_code=400, detail="Добавьте хотя бы одну заметку о руке перед анализом")
+
+    result = await analyze_opponent(opp.nickname, notes)
+    if not result:
+        raise HTTPException(status_code=503, detail="Не удалось выполнить анализ. Попробуйте позже.")
+
+    opp = await update_opponent_analysis(session, opponent_id, current_user.id, json.dumps(result, ensure_ascii=False))
+    return _opponent_to_out(opp)
+
+
+@router.delete("/opponents/{opponent_id}")
+async def delete_opponent_endpoint(
+    opponent_id: int,
+    current_user=Depends(get_current_web_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete an opponent profile."""
+    deleted = await delete_opponent(session, opponent_id, current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Оппонент не найден")
+    return {"deleted": True}
 
 
 @router.get("/profile", response_model=ProfileResponse)

@@ -8,6 +8,7 @@ import {
   MessageSquare,
   History,
   User,
+  Users,
   LogOut,
   Menu,
   X,
@@ -16,12 +17,13 @@ import {
 import { useAuth } from '../store/auth'
 
 const navItems = [
-  { path: '/app/dashboard', icon: LayoutDashboard, label: 'Главная' },
-  { path: '/app/analyze', icon: Search, label: 'Анализ' },
-  { path: '/app/training', icon: BookOpen, label: 'Обучение' },
-  { path: '/app/assistant', icon: MessageSquare, label: 'AI Тренер' },
-  { path: '/app/history', icon: History, label: 'История' },
-  { path: '/app/profile', icon: User, label: 'Профиль' },
+  { path: '/app/dashboard', icon: LayoutDashboard, label: 'Главная', tip: 'Статистика и быстрый доступ к функциям' },
+  { path: '/app/analyze', icon: Search, label: 'Анализ', tip: 'Анализ раздач — вставь текст или загрузи скриншот' },
+  { path: '/app/training', icon: BookOpen, label: 'Обучение', tip: 'Уроки по стратегии с тестами' },
+  { path: '/app/assistant', icon: MessageSquare, label: 'AI Тренер', tip: 'Задай любой вопрос по покеру' },
+  { path: '/app/history', icon: History, label: 'История', tip: 'Последние 20 проанализированных раздач' },
+  { path: '/app/opponents', icon: Users, label: 'Оппоненты', tip: 'Профили и анализ стиля игры оппонентов' },
+  { path: '/app/profile', icon: User, label: 'Профиль', tip: 'Настройки профиля и уровень опыта' },
 ]
 
 const experienceLabels: Record<string, string> = {
@@ -83,13 +85,14 @@ export default function Layout() {
 
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navItems.map(({ path, icon: Icon, label }) => (
+          {navItems.map(({ path, icon: Icon, label, tip }) => (
             <NavLink
               key={path}
               to={path}
               onClick={() => setSidebarOpen(false)}
+              title={tip}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+                `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group relative ${
                   isActive
                     ? 'bg-poker-primary/20 text-poker-primary border border-poker-primary/30'
                     : 'text-poker-text-muted hover:bg-poker-secondary hover:text-poker-text'

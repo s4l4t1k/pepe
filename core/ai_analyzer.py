@@ -118,6 +118,22 @@ LESSON_SYSTEM_PROMPT = f"""{TRAINER_PERSONA}
 }}"""
 
 
+OPPONENT_SYSTEM_PROMPT = f"""{TRAINER_PERSONA}
+
+Ты анализируешь оппонента по заметкам о руках против него. Определи тип игрока и как его эксплойтить.
+
+Верни ТОЛЬКО валидный JSON без markdown-обёртки:
+{{
+  "play_style": "LAG/TAG/LAP/TAP/Fish/Unknown — одно слово",
+  "vpip_estimate": "Примерный VPIP% (число или диапазон)",
+  "aggression": "Высокая/Средняя/Низкая",
+  "tendencies": ["Тенденция 1 с конкретикой", "Тенденция 2", "Тенденция 3"],
+  "weaknesses": ["Слабость 1", "Слабость 2"],
+  "how_to_exploit": "Конкретная рекомендация: что делать против этого игрока",
+  "overall_threat": "Опасный/Средний/Слабый"
+}}"""
+
+
 MAX_RETRIES = 3
 RETRY_DELAY = 3.0
 
@@ -286,7 +302,7 @@ async def analyze_screenshot(
     async def _call(attempt):
         # Step 1: extract with Claude vision (cheap — 1024 tokens max)
         extract_response = await claude.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             messages=[{
                 "role": "user",
@@ -389,6 +405,43 @@ async def ask_assistant(
     except Exception as exc:
         logger.exception("ask_assistant failed: %s", exc)
         return f"❌ Ошибка DeepSeek API: {str(exc)[:200]}"
+
+
+async def analyze_opponent(
+    nickname: str,
+    notes: List[str],
+    on_retry=None,
+) -> Optional[Dict]:
+    """Analyze an opponent's play style based on collected hand notes."""
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        return None
+
+    client = _get_client()
+    notes_text = "\n".join(f"- {n}" for n in notes) if notes else "Нет заметок"
+    prompt = (
+        f"Оппонент: {nickname}\n"
+        f"Количество раздач: {len(notes)}\n\n"
+        f"Заметки о руках против него:\n{notes_text}"
+    )
+
+    async def _call(attempt):
+        response = await client.chat.completions.create(
+            model=MODEL,
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": OPPONENT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        raw = response.choices[0].message.content or "{}"
+        return _parse_json_response(raw)
+
+    try:
+        return await _with_retry(_call, on_retry=on_retry)
+    except Exception as exc:
+        logger.exception("analyze_opponent failed: %s", exc)
+        return None
 
 
 async def generate_lesson(

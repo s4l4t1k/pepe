@@ -80,6 +80,26 @@ export interface ModuleItem {
   total_count: number
 }
 
+export interface OpponentAnalysis {
+  play_style: string
+  vpip_estimate: string
+  aggression: string
+  tendencies: string[]
+  weaknesses: string[]
+  how_to_exploit: string
+  overall_threat: string
+}
+
+export interface Opponent {
+  id: number
+  nickname: string
+  notes: string[]
+  analysis: OpponentAnalysis | null
+  hands_count: number
+  created_at: string
+  updated_at: string
+}
+
 export interface LessonContent {
   title: string
   introduction: string
@@ -123,4 +143,14 @@ export const webAPI = {
     client.post(`/web/training/complete/${lesson_id}`, {}),
   getHistory: () => client.get<HandRecord[]>('/web/history'),
   getProfile: () => client.get('/web/profile'),
+  // Opponents
+  createOpponent: (nickname: string) =>
+    client.post<Opponent>('/web/opponents', { nickname }),
+  listOpponents: () => client.get<Opponent[]>('/web/opponents'),
+  getOpponent: (id: number) => client.get<Opponent>(`/web/opponents/${id}`),
+  addOpponentNote: (id: number, note: string) =>
+    client.post<Opponent>(`/web/opponents/${id}/note`, { note }),
+  analyzeOpponent: (id: number) =>
+    client.post<Opponent>(`/web/opponents/${id}/analyze`, {}),
+  deleteOpponent: (id: number) => client.delete(`/web/opponents/${id}`),
 }
