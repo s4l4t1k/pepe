@@ -228,6 +228,7 @@ def _strip_markdown(text: str) -> str:
 
 
 def _parse_json_response(text: str) -> dict:
+    import re
     text = text.strip()
     # Strip markdown code blocks
     if text.startswith("```"):
@@ -247,13 +248,20 @@ def _parse_json_response(text: str) -> dict:
             return json.loads(text[start:end])
         except json.JSONDecodeError:
             pass
-    # Last resort: fix unterminated strings by truncating at last complete field
-    import re
-    # Remove trailing incomplete key-value pairs
-    clean = re.sub(r',?\s*"[^"]*":\s*"[^"]*$', '', text)
-    if not clean.endswith("}"):
-        clean = clean.rstrip(",\n\r\t ") + "}"
-    return json.loads(clean)
+    # Truncated JSON: walk back from the end, removing the last field until parseable
+    if start != -1:
+        chunk = text[start:]
+        # Find all positions where a new field starts: , "key": or { "key":
+        field_starts = [m.start() for m in re.finditer(r'(?<=[,{])\s*"[^"]+"\s*:', chunk)]
+        for pos in reversed(field_starts):
+            candidate = chunk[:pos].rstrip(',\n\r\t ')
+            if not candidate.endswith('}'):
+                candidate += '}'
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+    return {}
 
 
 async def analyze_hand(parsed: ParsedHand, on_retry=None) -> AnalysisResult:
@@ -331,7 +339,7 @@ async def analyze_screenshot(
         # Step 1: extract with Gemini Flash vision (free, no Russian IP block)
         extract_response = await vision_client.chat.completions.create(
             model="gemini-2.5-flash",
-            max_tokens=2048,
+            max_tokens=8192,
             messages=[{
                 "role": "user",
                 "content": [
