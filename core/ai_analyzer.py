@@ -229,10 +229,31 @@ def _strip_markdown(text: str) -> str:
 
 def _parse_json_response(text: str) -> dict:
     text = text.strip()
+    # Strip markdown code blocks
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text.strip())
+        text = text.strip()
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Try to extract JSON object from anywhere in the text
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+    # Last resort: fix unterminated strings by truncating at last complete field
+    import re
+    # Remove trailing incomplete key-value pairs
+    clean = re.sub(r',?\s*"[^"]*":\s*"[^"]*$', '', text)
+    if not clean.endswith("}"):
+        clean = clean.rstrip(",\n\r\t ") + "}"
+    return json.loads(clean)
 
 
 async def analyze_hand(parsed: ParsedHand, on_retry=None) -> AnalysisResult:
