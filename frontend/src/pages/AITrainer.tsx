@@ -778,7 +778,7 @@ export default function AITrainer() {
         <motion.div key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
           {tab === 'analyze' && <AnalyzeTab dailyRemaining={dailyRemaining} dailyLimit={dailyLimit} onAnalyzed={handleAnalyzed} />}
           {tab === 'training' && <TrainingTab />}
-          {tab === 'chat' && <ChatTab />}
+          {tab === 'chat' && <ChatTab onAnalyzed={handleAnalyzed} />}
         </motion.div>
       </AnimatePresence>
     </div>
