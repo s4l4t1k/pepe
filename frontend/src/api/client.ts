@@ -44,6 +44,8 @@ export interface User {
   experience_level: string | null
   play_style: string | null
   hands_analyzed_count: number
+  daily_analyses_remaining: number
+  daily_limit: number
   created_at: string
 }
 

@@ -2,9 +2,10 @@ import os
 from datetime import datetime
 from typing import Optional, List
 
+from datetime import date as date_type
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, BigInteger,
-    ForeignKey, select, desc, func, text
+    ForeignKey, select, desc, func, text, and_
 )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -392,6 +393,18 @@ async def get_web_user_stats(
         "hands_count": hands_count,
         "lessons_count": lessons_count,
     }
+
+
+async def get_today_web_analyses_count(session: AsyncSession, web_user_id: int) -> int:
+    """Count how many hands the web user has analyzed today (UTC)."""
+    today = datetime.utcnow().date()
+    start_of_day = datetime(today.year, today.month, today.day)
+    result = await session.execute(
+        select(func.count(Hand.id)).where(
+            and_(Hand.web_user_id == web_user_id, Hand.created_at >= start_of_day)
+        )
+    )
+    return result.scalar() or 0
 
 
 async def save_web_hand(

@@ -17,6 +17,7 @@ from core.database import (
     get_web_completed_lessons,
     mark_web_lesson_complete,
     get_web_user_stats,
+    get_today_web_analyses_count,
     create_opponent,
     get_opponents,
     get_opponent_by_id,
@@ -24,6 +25,8 @@ from core.database import (
     update_opponent_analysis,
     delete_opponent,
 )
+
+DAILY_LIMIT = 20
 from core.parser import parse_hand
 from core.ai_analyzer import analyze_hand, analyze_screenshot, ask_assistant, generate_lesson, analyze_opponent
 from api.routes.auth import get_current_web_user
@@ -77,6 +80,8 @@ class ProfileResponse(BaseModel):
     play_style: Optional[str]
     hands_analyzed_count: int
     lessons_completed_count: int
+    daily_analyses_remaining: int
+    daily_limit: int
     created_at: str
 
 
@@ -102,6 +107,13 @@ async def analyze_hand_endpoint(
     """Analyze a poker hand text."""
     if not req.hand_text or not req.hand_text.strip():
         raise HTTPException(status_code=400, detail="hand_text не может быть пустым")
+
+    today_count = await get_today_web_analyses_count(session, current_user.id)
+    if today_count >= DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Лимит {DAILY_LIMIT} анализов в день достигнут. Возвращайтесь завтра."
+        )
 
     parsed = parse_hand(req.hand_text)
 
@@ -147,6 +159,13 @@ async def analyze_screenshot_endpoint(
     image_bytes = await file.read()
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+
+    today_count = await get_today_web_analyses_count(session, current_user.id)
+    if today_count >= DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Лимит {DAILY_LIMIT} анализов в день достигнут. Возвращайтесь завтра."
+        )
 
     analysis = await analyze_screenshot(
         image_bytes,
@@ -413,6 +432,7 @@ async def get_profile(
 ) -> ProfileResponse:
     """Return user stats and profile info."""
     stats = await get_web_user_stats(session, current_user.id)
+    today_count = await get_today_web_analyses_count(session, current_user.id)
 
     return ProfileResponse(
         id=current_user.id,
@@ -422,5 +442,7 @@ async def get_profile(
         play_style=current_user.play_style,
         hands_analyzed_count=stats["hands_count"],
         lessons_completed_count=stats["lessons_count"],
+        daily_analyses_remaining=max(0, DAILY_LIMIT - today_count),
+        daily_limit=DAILY_LIMIT,
         created_at=current_user.created_at.isoformat(),
     )

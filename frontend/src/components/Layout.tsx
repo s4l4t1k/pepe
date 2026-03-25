@@ -1,166 +1,103 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
-import {
-  LayoutDashboard,
-  Search,
-  BookOpen,
-  MessageSquare,
-  History,
-  User,
-  Users,
-  LogOut,
-  Menu,
-  X,
-  Spade,
-} from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Zap, History, Users, User, LogOut, Menu, X } from 'lucide-react'
 import { useAuth } from '../store/auth'
 
-const navItems = [
-  { path: '/app/dashboard', icon: LayoutDashboard, label: 'Главная', tip: 'Статистика и быстрый доступ к функциям' },
-  { path: '/app/analyze', icon: Search, label: 'Анализ', tip: 'Анализ раздач — вставь текст или загрузи скриншот' },
-  { path: '/app/training', icon: BookOpen, label: 'Обучение', tip: 'Уроки по стратегии с тестами' },
-  { path: '/app/assistant', icon: MessageSquare, label: 'AI Тренер', tip: 'Задай любой вопрос по покеру' },
-  { path: '/app/history', icon: History, label: 'История', tip: 'Последние 20 проанализированных раздач' },
-  { path: '/app/opponents', icon: Users, label: 'Оппоненты', tip: 'Профили и анализ стиля игры оппонентов' },
-  { path: '/app/profile', icon: User, label: 'Профиль', tip: 'Настройки профиля и уровень опыта' },
+const NAV = [
+  { path: '/app/trainer', icon: Zap, label: 'AI Тренер' },
+  { path: '/app/history', icon: History, label: 'История' },
+  { path: '/app/opponents', icon: Users, label: 'Оппоненты' },
+  { path: '/app/profile', icon: User, label: 'Профиль' },
 ]
-
-const experienceLabels: Record<string, string> = {
-  beginner: 'Новичок',
-  amateur: 'Любитель',
-  semipro: 'Полурег',
-  pro: 'Регуляр',
-}
 
 export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [open, setOpen] = useState(false)
 
-  const handleLogout = () => {
-    logout()
-    navigate('/')
-  }
-
-  const levelBadge = user?.experience_level ? (
-    <span className="text-xs bg-poker-primary/20 text-poker-primary border border-poker-primary/30 px-2 py-0.5 rounded-full">
-      {experienceLabels[user.experience_level] || user.experience_level}
-    </span>
-  ) : null
+  const handleLogout = () => { logout(); navigate('/') }
 
   return (
-    <div className="flex h-screen bg-poker-bg overflow-hidden">
+    <div className="flex h-screen bg-zinc-950 overflow-hidden">
       {/* Mobile overlay */}
       <AnimatePresence>
-        {sidebarOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 z-20 lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
+        {open && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 z-20 lg:hidden" onClick={() => setOpen(false)} />
         )}
       </AnimatePresence>
 
       {/* Sidebar */}
-      <motion.aside
-        className={`fixed lg:relative top-0 left-0 h-full w-64 bg-poker-card border-r border-poker-border flex flex-col z-30 transform transition-transform duration-300 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
-      >
+      <aside className={`fixed lg:relative top-0 left-0 h-full w-56 bg-zinc-900 border-r border-zinc-800 flex flex-col z-30 transition-transform duration-250 ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         {/* Logo */}
-        <div className="p-6 border-b border-poker-border">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-poker-primary/20 rounded-xl flex items-center justify-center">
-              <Spade className="w-6 h-6 text-poker-primary" />
+        <div className="px-5 py-5 border-b border-zinc-800 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-amber-500/15 rounded-lg flex items-center justify-center">
+              <Zap className="w-4 h-4 text-amber-500" />
             </div>
             <div>
-              <h1 className="font-bold text-poker-primary text-lg leading-tight">Poker Coach</h1>
-              <p className="text-poker-text-muted text-xs">AI Тренер</p>
+              <p className="text-sm font-bold text-zinc-100 leading-none">Poker Coach</p>
+              <p className="text-[10px] text-zinc-600 mt-0.5">AI Тренер</p>
             </div>
           </div>
+          <button onClick={() => setOpen(false)} className="lg:hidden text-zinc-600 hover:text-zinc-400">
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navItems.map(({ path, icon: Icon, label, tip }) => (
-            <NavLink
-              key={path}
-              to={path}
-              onClick={() => setSidebarOpen(false)}
-              title={tip}
+        {/* Nav */}
+        <nav className="flex-1 p-3 space-y-0.5">
+          {NAV.map(({ path, icon: Icon, label }) => (
+            <NavLink key={path} to={path} onClick={() => setOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group relative ${
-                  isActive
-                    ? 'bg-poker-primary/20 text-poker-primary border border-poker-primary/30'
-                    : 'text-poker-text-muted hover:bg-poker-secondary hover:text-poker-text'
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800'
                 }`
-              }
-            >
-              <Icon className="w-5 h-5 flex-shrink-0" />
-              <span className="font-medium">{label}</span>
+              }>
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              {label}
             </NavLink>
           ))}
         </nav>
 
-        {/* User info & logout */}
-        <div className="p-4 border-t border-poker-border">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-9 h-9 bg-poker-secondary rounded-full flex items-center justify-center border border-poker-border">
-              <span className="text-poker-primary font-semibold text-sm">
-                {user?.first_name?.charAt(0).toUpperCase() || '?'}
-              </span>
+        {/* User */}
+        <div className="p-3 border-t border-zinc-800">
+          <div className="flex items-center gap-2.5 mb-2 px-1">
+            <div className="w-7 h-7 bg-zinc-800 rounded-full flex items-center justify-center border border-zinc-700 flex-shrink-0">
+              <span className="text-amber-500 text-xs font-bold">{user?.first_name?.charAt(0).toUpperCase() || '?'}</span>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-medium text-sm truncate">{user?.first_name}</p>
-              <p className="text-poker-text-muted text-xs truncate">{user?.email}</p>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-zinc-200 truncate">{user?.first_name}</p>
+              <p className="text-[10px] text-zinc-600 truncate">{user?.email}</p>
             </div>
           </div>
-          {levelBadge && <div className="mb-3">{levelBadge}</div>}
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-poker-text-muted hover:text-poker-danger transition-colors text-sm w-full px-2 py-1.5 rounded-lg hover:bg-poker-danger/10"
-          >
-            <LogOut className="w-4 h-4" />
+          <button onClick={handleLogout}
+            className="flex items-center gap-2 text-zinc-600 hover:text-red-400 transition-colors text-xs w-full px-2 py-1.5 rounded-lg hover:bg-red-950/20">
+            <LogOut className="w-3.5 h-3.5" />
             Выйти
           </button>
         </div>
-      </motion.aside>
+      </aside>
 
-      {/* Main content */}
+      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar (mobile) */}
-        <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-poker-card border-b border-poker-border z-10">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="p-2 rounded-lg text-poker-text-muted hover:text-poker-text hover:bg-poker-secondary"
-          >
+        {/* Mobile top bar */}
+        <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-zinc-900 border-b border-zinc-800">
+          <button onClick={() => setOpen(true)} className="p-1.5 text-zinc-500 hover:text-zinc-300">
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2">
-            <Spade className="w-5 h-5 text-poker-primary" />
-            <span className="font-bold text-poker-primary">Poker Coach AI</span>
+            <Zap className="w-4 h-4 text-amber-500" />
+            <span className="text-sm font-bold text-zinc-100">Poker Coach</span>
           </div>
-          <div className="w-9 h-9 bg-poker-secondary rounded-full flex items-center justify-center border border-poker-border">
-            <span className="text-poker-primary font-semibold text-sm">
-              {user?.first_name?.charAt(0).toUpperCase() || '?'}
-            </span>
+          <div className="w-7 h-7 bg-zinc-800 rounded-full flex items-center justify-center border border-zinc-700">
+            <span className="text-amber-500 text-xs font-bold">{user?.first_name?.charAt(0).toUpperCase() || '?'}</span>
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto">
-          <motion.div
-            key={window.location.pathname}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
-            className="min-h-full"
-          >
-            <Outlet />
-          </motion.div>
+          <Outlet />
         </main>
       </div>
     </div>
