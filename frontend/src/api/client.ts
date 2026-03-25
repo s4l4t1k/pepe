@@ -116,6 +116,11 @@ export interface LessonContent {
 
 // Auth
 export const authAPI = {
+  sendCode: (email: string) =>
+    client.post<{ ok: boolean; is_new: boolean }>('/auth/send-code', { email }),
+  verifyCode: (email: string, code: string, first_name?: string) =>
+    client.post('/auth/verify-code', { email, code, first_name }),
+  // Legacy
   register: (email: string, password: string, first_name: string) =>
     client.post('/auth/register', { email, password, first_name }),
   login: (email: string, password: string) =>

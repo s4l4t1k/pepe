@@ -49,12 +49,14 @@ class WebUser(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # nullable for OTP-only users
     first_name = Column(String(255), nullable=False)
     experience_level = Column(String(50), nullable=True)
     play_style = Column(String(50), nullable=True)
     hands_analyzed_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    otp_code = Column(String(6), nullable=True)
+    otp_expires_at = Column(DateTime, nullable=True)
 
     web_hands = relationship("Hand", back_populates="web_user", lazy="select",
                              foreign_keys="Hand.web_user_id")
@@ -123,6 +125,13 @@ async def init_db() -> None:
                 created_at DATETIME NOT NULL
             )
         """))
+        # Migration: add OTP columns to web_users if missing
+        for col, col_def in [("otp_code", "VARCHAR(6)"), ("otp_expires_at", "DATETIME")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE web_users ADD COLUMN {col} {col_def}"))
+            except Exception:
+                pass  # Column already exists
+
         # Check if old hands table still has NOT NULL on user_id
         result = await conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='hands'"))
         row = result.fetchone()
@@ -315,12 +324,12 @@ async def get_user_stats(
 async def create_web_user(
     session: AsyncSession,
     email: str,
-    password_hash: str,
     first_name: str,
+    password_hash: Optional[str] = None,
 ) -> WebUser:
     user = WebUser(
         email=email,
-        password_hash=password_hash,
+        password_hash=password_hash or "",
         first_name=first_name,
         hands_analyzed_count=0,
     )
@@ -328,6 +337,36 @@ async def create_web_user(
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def set_otp(
+    session: AsyncSession,
+    email: str,
+    code: str,
+    expires_at: datetime,
+) -> None:
+    """Save OTP code for an email (upserts into existing user or does nothing if no user yet)."""
+    result = await session.execute(select(WebUser).where(WebUser.email == email))
+    user = result.scalar_one_or_none()
+    if user:
+        user.otp_code = code
+        user.otp_expires_at = expires_at
+        await session.commit()
+
+
+async def get_otp_user(
+    session: AsyncSession,
+    email: str,
+) -> Optional[WebUser]:
+    """Return WebUser with pending OTP for this email."""
+    result = await session.execute(select(WebUser).where(WebUser.email == email))
+    return result.scalar_one_or_none()
+
+
+async def clear_otp(session: AsyncSession, user: WebUser) -> None:
+    user.otp_code = None
+    user.otp_expires_at = None
+    await session.commit()
 
 
 async def get_web_user_by_email(
