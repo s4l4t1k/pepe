@@ -4,7 +4,7 @@ import {
   FileText, Camera, Upload, X, Loader, ChevronDown, ChevronUp,
   AlertCircle, Send, Trash2, Spade, User as UserIcon,
   BookOpen, CheckCircle2, Circle, ChevronRight, ChevronLeft,
-  Trophy, Lightbulb, Target, Brain, Zap,
+  Trophy, Lightbulb, Target, Brain, Zap, Paperclip,
 } from 'lucide-react'
 import { webAPI, AnalysisResult, ModuleItem, LessonContent } from '../api/client'
 import { useAuth } from '../store/auth'
@@ -511,7 +511,15 @@ function TrainingTab() {
 
 // ── Chat Tab ──────────────────────────────────────────────────────────────────
 
-interface Message { role: 'user' | 'assistant'; content: string; timestamp: Date }
+type MsgType = 'text' | 'analysis' | 'image'
+interface Message {
+  role: 'user' | 'assistant'
+  type: MsgType
+  content: string
+  analysis?: AnalysisResult
+  imagePreview?: string
+  timestamp: Date
+}
 
 const SUGGESTED = [
   'Как правильно защищать BB против стила?',
@@ -521,35 +529,103 @@ const SUGGESTED = [
   'VPIP/PFR — какие значения оптимальны для TAG?',
 ]
 
-function ChatTab() {
+function InlineAnalysis({ a }: { a: AnalysisResult }) {
+  const fields = [
+    { label: 'Префлоп', val: a.preflop },
+    { label: 'Флоп', val: a.flop },
+    { label: 'Тёрн', val: a.turn },
+    { label: 'Ривер', val: a.river },
+  ].filter(f => f.val)
+
+  return (
+    <div className="space-y-2 w-full max-w-sm">
+      {a.overall_score && <ScoreBadge score={a.overall_score} />}
+      {fields.map(f => (
+        <div key={f.label}>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{f.label}: </span>
+          <span className="text-xs text-zinc-300">{f.val}</span>
+        </div>
+      ))}
+      {a.main_leak && (
+        <div className="mt-1 px-3 py-2 bg-red-950/30 border border-red-900/40 rounded-lg text-xs text-red-400">
+          <span className="font-semibold">Утечка: </span>{a.main_leak}
+        </div>
+      )}
+      {a.recommended_line && (
+        <div className="px-3 py-2 bg-emerald-950/30 border border-emerald-900/40 rounded-lg text-xs text-emerald-400">
+          <span className="font-semibold">Линия: </span>{a.recommended_line}
+        </div>
+      )}
+      {a.ev_estimate && (
+        <div className="text-xs font-mono text-amber-400 opacity-80">{a.ev_estimate}</div>
+      )}
+    </div>
+  )
+}
+
+function ChatTab({ onAnalyzed }: { onAnalyzed: () => void }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const { user } = useAuth()
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+
+  const addMsg = (msg: Message) => setMessages(prev => [...prev, msg])
 
   const send = async (q?: string) => {
     const text = q || input.trim()
     if (!text || loading) return
-    const userMsg: Message = { role: 'user', content: text, timestamp: new Date() }
-    setMessages(prev => [...prev, userMsg]); setInput(''); setLoading(true)
-    const history = messages.map(m => ({ role: m.role, content: m.content }))
+    addMsg({ role: 'user', type: 'text', content: text, timestamp: new Date() })
+    setInput(''); setLoading(true)
+
     try {
-      const resp = await webAPI.askAssistant(text, history)
-      setMessages(prev => [...prev, { role: 'assistant', content: resp.data.answer, timestamp: new Date() }])
+      // Try as poker hand first; fall back to assistant on 422
+      try {
+        const resp = await webAPI.analyzeHand(text)
+        addMsg({ role: 'assistant', type: 'analysis', content: '', analysis: resp.data.analysis, timestamp: new Date() })
+        onAnalyzed()
+      } catch (e: any) {
+        if (e?.response?.status === 422) {
+          // Not a poker hand — use assistant
+          const history = messages.map(m => ({ role: m.role, content: m.content }))
+          const resp = await webAPI.askAssistant(text, history)
+          addMsg({ role: 'assistant', type: 'text', content: resp.data.answer, timestamp: new Date() })
+        } else {
+          throw e
+        }
+      }
     } catch (e: any) {
       const detail = e?.response?.data?.detail || 'Не удалось получить ответ'
-      setMessages(prev => [...prev, { role: 'assistant', content: `Ошибка: ${detail}`, timestamp: new Date() }])
+      addMsg({ role: 'assistant', type: 'text', content: `Ошибка: ${detail}`, timestamp: new Date() })
     } finally { setLoading(false); inputRef.current?.focus() }
+  }
+
+  const sendImage = async (file: File) => {
+    if (loading) return
+    const preview = URL.createObjectURL(file)
+    addMsg({ role: 'user', type: 'image', content: file.name, imagePreview: preview, timestamp: new Date() })
+    setLoading(true)
+    try {
+      const resp = await webAPI.analyzeScreenshot(file)
+      addMsg({ role: 'assistant', type: 'analysis', content: '', analysis: resp.data.analysis, timestamp: new Date() })
+      onAnalyzed()
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'Ошибка анализа скриншота'
+      addMsg({ role: 'assistant', type: 'text', content: `Ошибка: ${detail}`, timestamp: new Date() })
+    } finally { setLoading(false) }
   }
 
   const fmt = (d: Date) => d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
 
   return (
     <div className="flex flex-col" style={{ height: 'calc(100vh - 220px)', minHeight: 400 }}>
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) { sendImage(f); e.target.value = '' } }} />
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1">
         {messages.length === 0 ? (
@@ -558,7 +634,11 @@ function ChatTab() {
               <Spade className="w-6 h-6 text-amber-500" />
             </div>
             <h3 className="font-semibold text-zinc-100 mb-1">Привет, {user?.first_name}!</h3>
-            <p className="text-sm text-zinc-500 mb-5 max-w-xs">Задавай любые вопросы о покере — отвечу с числами и диапазонами.</p>
+            <p className="text-sm text-zinc-500 mb-1 max-w-xs leading-relaxed">
+              Задай вопрос, скинь раздачу текстом или загрузи скриншот —
+              <span className="text-amber-500"> сам пойму что нужно сделать.</span>
+            </p>
+            <p className="text-xs text-zinc-600 mb-5">📎 Скрепка — для скриншота</p>
             <div className="space-y-2 max-w-sm">
               {SUGGESTED.map((q, i) => (
                 <motion.button key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.06 }}
@@ -574,21 +654,33 @@ function ChatTab() {
             {messages.map((msg, i) => (
               <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}
                 className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center ${
+                <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center mt-0.5 ${
                   msg.role === 'assistant' ? 'bg-amber-500/15 border border-amber-500/25' : 'bg-zinc-800 border border-zinc-700'
                 }`}>
                   {msg.role === 'assistant' ? <Spade className="w-3.5 h-3.5 text-amber-500" /> : <UserIcon className="w-3.5 h-3.5 text-zinc-400" />}
                 </div>
-                <div className={`max-w-[80%] flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                  <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                    msg.role === 'user' ? 'bg-amber-500 text-zinc-900 rounded-tr-sm' : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-sm'
-                  }`}>
-                    {msg.content}
-                  </div>
-                  <span className="text-[10px] text-zinc-600 px-1">{msg.role === 'assistant' ? 'Виктор' : user?.first_name} · {fmt(msg.timestamp)}</span>
+                <div className={`max-w-[85%] flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  {msg.type === 'image' && msg.imagePreview && (
+                    <img src={msg.imagePreview} alt="скриншот" className="max-w-[180px] rounded-xl border border-zinc-700 mb-1" />
+                  )}
+                  {msg.type === 'analysis' && msg.analysis ? (
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl rounded-tl-sm p-4">
+                      <InlineAnalysis a={msg.analysis} />
+                    </div>
+                  ) : msg.type !== 'image' || msg.content ? (
+                    <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                      msg.role === 'user' ? 'bg-amber-500 text-zinc-900 rounded-tr-sm' : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-sm'
+                    }`}>
+                      {msg.content}
+                    </div>
+                  ) : null}
+                  <span className="text-[10px] text-zinc-600 px-1">
+                    {msg.role === 'assistant' ? 'Виктор' : user?.first_name} · {fmt(msg.timestamp)}
+                  </span>
                 </div>
               </motion.div>
             ))}
+
             {loading && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-2.5">
                 <div className="w-7 h-7 rounded-full bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
@@ -615,10 +707,14 @@ function ChatTab() {
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         )}
+        <button onClick={() => fileInputRef.current?.click()} disabled={loading}
+          className="flex-shrink-0 w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-amber-500 hover:border-amber-500/40 disabled:opacity-40 transition-all">
+          <Paperclip className="w-4 h-4" />
+        </button>
         <textarea
           ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-          placeholder="Задай вопрос о покере..." rows={1} disabled={loading}
+          placeholder="Вопрос или раздача текстом..." rows={1} disabled={loading}
           className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-amber-500/50 transition-colors min-h-[40px] max-h-28"
           onInput={e => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 112) + 'px' }}
         />
