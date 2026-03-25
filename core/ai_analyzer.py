@@ -330,7 +330,7 @@ async def analyze_screenshot(
     async def _call(attempt):
         # Step 1: extract with Gemini Flash vision (free, no Russian IP block)
         extract_response = await vision_client.chat.completions.create(
-            model="gemini-2.5-flash-preview-04-17",
+            model="gemini-2.0-flash",
             max_tokens=2048,
             messages=[{
                 "role": "user",
