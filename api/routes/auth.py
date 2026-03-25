@@ -1,15 +1,21 @@
 """
 JWT authentication routes for web app users.
-Supports OTP (email code) auth and legacy password auth.
+Supports OTP (email code), Google OAuth, Telegram Login, and legacy password auth.
 """
+import hashlib
+import hmac
 import logging
 import os
 import random
 import string
+import time
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bcrypt
 from jose import JWTError, jwt
@@ -21,6 +27,8 @@ from core.database import (
     create_web_user,
     get_web_user_by_email,
     get_web_user_by_id,
+    get_web_user_by_telegram_id,
+    get_web_user_by_google_id,
     update_web_user_profile,
     set_otp,
     get_otp_user,
@@ -214,6 +222,162 @@ async def verify_code(
         user.first_name = req.first_name.strip()
 
     await clear_otp(session, user)
+
+    token = create_access_token(user.id)
+    return TokenResponse(access_token=token, user=_user_out(user))
+
+
+# ── Social config ─────────────────────────────────────────────────────────────
+
+@router.get("/social-config")
+async def social_config():
+    """Return which social auth methods are enabled (public)."""
+    return {
+        "google_enabled": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "telegram_bot_username": os.getenv("TELEGRAM_BOT_USERNAME", ""),
+    }
+
+
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+
+@router.get("/google")
+async def google_login():
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
+    if not client_id or not redirect_uri:
+        raise HTTPException(status_code=503, detail="Google OAuth не настроен на сервере")
+    params = urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str,
+    session: AsyncSession = Depends(get_session),
+):
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            # Exchange code for tokens
+            token_resp = await http.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                    "code": code,
+                },
+            )
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+            if not access_token:
+                raise ValueError("No access_token from Google")
+
+            # Get user info
+            user_resp = await http.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            user_info = user_resp.json()
+    except Exception as e:
+        logger.error(f"Google OAuth error: {e}")
+        return RedirectResponse("/auth?error=google_failed")
+
+    google_id = user_info.get("sub", "")
+    email = user_info.get("email", "").lower().strip()
+    first_name = user_info.get("given_name") or (user_info.get("name", "").split() or [""])[0] or "User"
+
+    if not google_id or not email:
+        return RedirectResponse("/auth?error=google_no_email")
+
+    # Find or create user
+    user = await get_web_user_by_google_id(session, google_id)
+    if not user:
+        user = await get_web_user_by_email(session, email)
+    if not user:
+        user = await create_web_user(session, email=email, first_name=first_name, google_id=google_id)
+    else:
+        if not user.google_id:
+            user.google_id = google_id
+            await session.commit()
+        if not user.first_name:
+            user.first_name = first_name
+            await session.commit()
+
+    jwt_token = create_access_token(user.id)
+    return RedirectResponse(f"/auth?token={jwt_token}")
+
+
+# ── Telegram Login ─────────────────────────────────────────────────────────────
+
+class TelegramAuthRequest(BaseModel):
+    id: int
+    first_name: str
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    photo_url: Optional[str] = None
+    auth_date: int
+    hash: str
+
+
+@router.post("/telegram", response_model=TokenResponse)
+async def telegram_auth(
+    req: TelegramAuthRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TokenResponse:
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        raise HTTPException(status_code=503, detail="Telegram auth не настроен на сервере")
+
+    # Verify HMAC hash per Telegram docs
+    fields = {
+        "auth_date": str(req.auth_date),
+        "first_name": req.first_name,
+        "id": str(req.id),
+    }
+    if req.last_name:
+        fields["last_name"] = req.last_name
+    if req.photo_url:
+        fields["photo_url"] = req.photo_url
+    if req.username:
+        fields["username"] = req.username
+
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    expected_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(expected_hash, req.hash):
+        raise HTTPException(status_code=401, detail="Неверная подпись Telegram")
+
+    # Freshness check (24 hours)
+    if abs(int(time.time()) - req.auth_date) > 86400:
+        raise HTTPException(status_code=401, detail="Устаревшие данные авторизации. Попробуй снова")
+
+    # Find or create user
+    user = await get_web_user_by_telegram_id(session, req.id)
+    if not user:
+        name = req.first_name
+        if req.last_name:
+            name = f"{req.first_name} {req.last_name}"
+        tg_email = f"tg_{req.id}@telegram.user"
+        user = await get_web_user_by_email(session, tg_email)
+        if not user:
+            user = await create_web_user(session, email=tg_email, first_name=name, telegram_id=req.id)
+        else:
+            user.telegram_id = req.id
+            if not user.first_name:
+                user.first_name = name
+            await session.commit()
 
     token = create_access_token(user.id)
     return TokenResponse(access_token=token, user=_user_out(user))

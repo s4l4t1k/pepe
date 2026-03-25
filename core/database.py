@@ -57,6 +57,8 @@ class WebUser(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     otp_code = Column(String(6), nullable=True)
     otp_expires_at = Column(DateTime, nullable=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=True, index=True)
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
 
     web_hands = relationship("Hand", back_populates="web_user", lazy="select",
                              foreign_keys="Hand.web_user_id")
@@ -125,8 +127,13 @@ async def init_db() -> None:
                 created_at DATETIME NOT NULL
             )
         """))
-        # Migration: add OTP columns to web_users if missing
-        for col, col_def in [("otp_code", "VARCHAR(6)"), ("otp_expires_at", "DATETIME")]:
+        # Migration: add columns to web_users if missing
+        for col, col_def in [
+            ("otp_code", "VARCHAR(6)"),
+            ("otp_expires_at", "DATETIME"),
+            ("telegram_id", "BIGINT"),
+            ("google_id", "VARCHAR(255)"),
+        ]:
             try:
                 await conn.execute(text(f"ALTER TABLE web_users ADD COLUMN {col} {col_def}"))
             except Exception:
@@ -326,12 +333,16 @@ async def create_web_user(
     email: str,
     first_name: str,
     password_hash: Optional[str] = None,
+    telegram_id: Optional[int] = None,
+    google_id: Optional[str] = None,
 ) -> WebUser:
     user = WebUser(
         email=email,
         password_hash=password_hash or "",
         first_name=first_name,
         hands_analyzed_count=0,
+        telegram_id=telegram_id,
+        google_id=google_id,
     )
     session.add(user)
     await session.commit()
@@ -367,6 +378,26 @@ async def clear_otp(session: AsyncSession, user: WebUser) -> None:
     user.otp_code = None
     user.otp_expires_at = None
     await session.commit()
+
+
+async def get_web_user_by_telegram_id(
+    session: AsyncSession,
+    telegram_id: int,
+) -> Optional[WebUser]:
+    result = await session.execute(
+        select(WebUser).where(WebUser.telegram_id == telegram_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_web_user_by_google_id(
+    session: AsyncSession,
+    google_id: str,
+) -> Optional[WebUser]:
+    result = await session.execute(
+        select(WebUser).where(WebUser.google_id == google_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_web_user_by_email(

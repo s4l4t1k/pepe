@@ -114,12 +114,21 @@ export interface LessonContent {
   quiz_explanation: string
 }
 
+export interface SocialConfig {
+  google_enabled: boolean
+  telegram_bot_username: string
+}
+
 // Auth
 export const authAPI = {
   sendCode: (email: string) =>
     client.post<{ ok: boolean; is_new: boolean }>('/auth/send-code', { email }),
   verifyCode: (email: string, code: string, first_name?: string) =>
     client.post('/auth/verify-code', { email, code, first_name }),
+  telegramAuth: (data: Record<string, string | number>) =>
+    client.post('/auth/telegram', data),
+  socialConfig: () =>
+    client.get<SocialConfig>('/auth/social-config'),
   // Legacy
   register: (email: string, password: string, first_name: string) =>
     client.post('/auth/register', { email, password, first_name }),
