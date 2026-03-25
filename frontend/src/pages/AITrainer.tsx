@@ -118,19 +118,9 @@ function ChatTab({ dailyRemaining, dailyLimit, onAnalyzed }: {
     setInput(''); setLoading(true)
 
     try {
-      try {
-        const resp = await webAPI.analyzeHand(text)
-        addMsg({ role: 'assistant', type: 'analysis', content: '', analysis: resp.data.analysis, timestamp: new Date() })
-        onAnalyzed()
-      } catch (e: any) {
-        if (e?.response?.status === 422) {
-          const history = messages.map(m => ({ role: m.role, content: m.content }))
-          const resp = await webAPI.askAssistant(text, history)
-          addMsg({ role: 'assistant', type: 'text', content: resp.data.answer, timestamp: new Date() })
-        } else {
-          throw e
-        }
-      }
+      const history = messages.map(m => ({ role: m.role, content: m.content }))
+      const resp = await webAPI.askAssistant(text, history)
+      addMsg({ role: 'assistant', type: 'text', content: resp.data.answer, timestamp: new Date() })
     } catch (e: any) {
       const detail = e?.response?.data?.detail || 'Не удалось получить ответ'
       addMsg({ role: 'assistant', type: 'text', content: `Ошибка: ${detail}`, timestamp: new Date() })
