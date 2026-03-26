@@ -17,6 +17,7 @@ from core.database import init_db
 from api.routes.hands import router as hands_router
 from api.routes.auth import router as auth_router
 from api.routes.web import router as web_router
+from api.routes.practice import router as practice_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +43,7 @@ app.add_middleware(
 app.include_router(hands_router)
 app.include_router(auth_router)
 app.include_router(web_router)
+app.include_router(practice_router)
 
 
 @app.on_event("startup")

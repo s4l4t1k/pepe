@@ -7,6 +7,7 @@ import AITrainer from './pages/AITrainer'
 import History from './pages/History'
 import Profile from './pages/Profile'
 import Opponents from './pages/Opponents'
+import Practice from './pages/Practice'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/app" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Navigate to="/app/trainer" replace />} />
             <Route path="trainer" element={<AITrainer />} />
+            <Route path="practice" element={<Practice />} />
             <Route path="history" element={<History />} />
             <Route path="opponents" element={<Opponents />} />
             <Route path="profile" element={<Profile />} />

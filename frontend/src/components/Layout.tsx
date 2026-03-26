@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Zap, History, Users, User, LogOut, Menu, X } from 'lucide-react'
+import { Zap, History, Users, User, LogOut, Menu, X, Swords } from 'lucide-react'
 import { useAuth } from '../store/auth'
 
 const NAV = [
   { path: '/app/trainer', icon: Zap, label: 'AI Тренер' },
+  { path: '/app/practice', icon: Swords, label: 'Практика' },
   { path: '/app/history', icon: History, label: 'История' },
   { path: '/app/opponents', icon: Users, label: 'Оппоненты' },
   { path: '/app/profile', icon: User, label: 'Профиль' },
