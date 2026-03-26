@@ -3,9 +3,11 @@
 """
 import logging
 import os
+import random
+import string
 
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, FSInputFile
@@ -15,6 +17,8 @@ from core.database import (
     get_or_create_user,
     get_user_by_telegram_id,
     update_user_profile,
+    get_telegram_login_session,
+    complete_telegram_login_session,
 )
 from bot.keyboards import (
     main_menu_keyboard,
@@ -107,8 +111,40 @@ def _profile_complete_text(first_name: str, exp: str, style: str) -> str:
 
 # ── Command handlers ──────────────────────────────────────────────────────────
 
+async def _handle_web_login(message: Message, session_token: str) -> None:
+    """Handle /start login_{session_token} — send OTP code for web login."""
+    tg_id = message.from_user.id
+    first_name = message.from_user.first_name or "Игрок"
+    username = message.from_user.username
+
+    async with async_session_factory() as db:
+        tg_session = await get_telegram_login_session(db, session_token)
+        if not tg_session:
+            await message.answer(
+                "❌ Сессия истекла или не найдена.\n"
+                "Вернись на сайт и нажми «Войти через Telegram» снова."
+            )
+            return
+
+        otp = "".join(random.choices(string.digits, k=6))
+        await complete_telegram_login_session(db, session_token, otp, tg_id, first_name, username)
+
+    await message.answer(
+        f"🔐 <b>Код для входа на сайт:</b>\n\n"
+        f"<code>{otp}</code>\n\n"
+        f"<i>Введи этот код на сайте.\nДействителен 10 минут.</i>",
+        parse_mode="HTML",
+    )
+
+
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
+    # Handle web login deep link: /start login_{session_token}
+    args = command.args if command else ""
+    if args and args.startswith("login_"):
+        await _handle_web_login(message, args[len("login_"):])
+        return
+
     await state.clear()
     tg_id = message.from_user.id
     first_name = message.from_user.first_name or "Игрок"

@@ -1,65 +1,40 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Loader, Mail, RefreshCw } from 'lucide-react'
-import { authAPI, SocialConfig } from '../api/client'
+import { ArrowLeft, Loader, Mail, RefreshCw, Send } from 'lucide-react'
+import { authAPI } from '../api/client'
 
-type Step = 'email' | 'code'
-
-declare global {
-  interface Window {
-    onTelegramAuth: (user: Record<string, string | number>) => void
-  }
-}
-
-function TelegramButton({ botUsername, onAuth }: {
-  botUsername: string
-  onAuth: (user: Record<string, string | number>) => void
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!containerRef.current || !botUsername) return
-    window.onTelegramAuth = onAuth
-
-    const script = document.createElement('script')
-    script.async = true
-    script.src = 'https://telegram.org/js/telegram-widget.js?22'
-    script.setAttribute('data-telegram-login', botUsername)
-    script.setAttribute('data-size', 'large')
-    script.setAttribute('data-onauth', 'onTelegramAuth(user)')
-    script.setAttribute('data-request-access', 'write')
-    script.setAttribute('data-radius', '12')
-    containerRef.current.appendChild(script)
-
-    return () => {
-      if (containerRef.current) containerRef.current.innerHTML = ''
-    }
-  }, [botUsername])
-
-  return <div ref={containerRef} className="flex justify-center" />
-}
+type Step = 'email' | 'code' | 'telegram'
 
 export default function Auth() {
   const [step, setStep] = useState<Step>('email')
+
+  // Email OTP state
   const [email, setEmail] = useState('')
   const [firstName, setFirstName] = useState('')
   const [isNew, setIsNew] = useState(false)
-  const [code, setCode] = useState(['', '', '', '', '', ''])
+  const [emailCode, setEmailCode] = useState(['', '', '', '', '', ''])
+  const [resendTimer, setResendTimer] = useState(0)
+
+  // Telegram OTP state
+  const [tgSessionToken, setTgSessionToken] = useState('')
+  const [tgBotUsername, setTgBotUsername] = useState('')
+  const [tgCode, setTgCode] = useState(['', '', '', '', '', ''])
+
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [resendTimer, setResendTimer] = useState(0)
-  const [socialCfg, setSocialCfg] = useState<SocialConfig | null>(null)
+  const [googleEnabled, setGoogleEnabled] = useState(false)
+  const [telegramEnabled, setTelegramEnabled] = useState(false)
 
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+  const emailInputRefs = useRef<(HTMLInputElement | null)[]>([])
+  const tgInputRefs = useRef<(HTMLInputElement | null)[]>([])
   const navigate = useNavigate()
 
-  // Handle Google OAuth redirect: /auth?token=JWT
+  // Handle ?token= from Google OAuth redirect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')
     const err = params.get('error')
-
     if (token) {
       setLoading(true)
       authAPI.me().then(resp => {
@@ -67,7 +42,6 @@ export default function Auth() {
         localStorage.setItem('poker_user', JSON.stringify(resp.data))
         window.location.href = '/app/trainer'
       }).catch(() => {
-        // Store token anyway and redirect
         localStorage.setItem('poker_token', token)
         window.location.href = '/app/trainer'
       })
@@ -79,41 +53,59 @@ export default function Auth() {
     }
   }, [])
 
-  // Load social auth config
+  // Load social config
   useEffect(() => {
-    authAPI.socialConfig().then(r => setSocialCfg(r.data)).catch(() => {})
+    authAPI.socialConfig().then(r => {
+      setGoogleEnabled(r.data.google_enabled)
+      setTelegramEnabled(!!r.data.telegram_bot_username)
+      if (r.data.telegram_bot_username) setTgBotUsername(r.data.telegram_bot_username)
+    }).catch(() => {})
   }, [])
 
-  // Resend timer
+  // Resend timer countdown
   useEffect(() => {
     if (resendTimer <= 0) return
     const t = setTimeout(() => setResendTimer(r => r - 1), 1000)
     return () => clearTimeout(t)
   }, [resendTimer])
 
-  const handleSocialLogin = async (data: Record<string, string | number>, provider: string) => {
-    setLoading(true)
-    setError('')
-    try {
-      let resp: any
-      if (provider === 'telegram') {
-        resp = await authAPI.telegramAuth(data)
-      } else {
-        return
-      }
-      const { access_token, user } = resp.data
-      localStorage.setItem('poker_token', access_token)
-      localStorage.setItem('poker_user', JSON.stringify(user))
-      window.location.href = '/app/trainer'
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : `Ошибка входа через ${provider}`)
-    } finally {
-      setLoading(false)
-    }
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  const saveAndRedirect = (token: string, user: any) => {
+    localStorage.setItem('poker_token', token)
+    localStorage.setItem('poker_user', JSON.stringify(user))
+    window.location.href = '/app/trainer'
   }
 
-  const sendCode = async (e?: React.FormEvent) => {
+  const makeCodeHandlers = (
+    codeState: string[],
+    setCode: (c: string[]) => void,
+    refs: React.MutableRefObject<(HTMLInputElement | null)[]>,
+    onComplete: (code: string) => void,
+  ) => ({
+    onInput: (i: number, val: string) => {
+      const digit = val.replace(/\D/g, '').slice(-1)
+      const next = [...codeState]; next[i] = digit
+      setCode(next); setError('')
+      if (digit && i < 5) refs.current[i + 1]?.focus()
+      if (next.every(d => d)) setTimeout(() => onComplete(next.join('')), 50)
+    },
+    onKeyDown: (i: number, e: React.KeyboardEvent) => {
+      if (e.key === 'Backspace' && !codeState[i] && i > 0) refs.current[i - 1]?.focus()
+    },
+    onPaste: (e: React.ClipboardEvent) => {
+      const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
+      if (text.length === 6) {
+        setCode(text.split(''))
+        refs.current[5]?.focus()
+        setTimeout(() => onComplete(text), 50)
+      }
+    },
+  })
+
+  // ── Email OTP ──────────────────────────────────────────────────────────────
+
+  const sendEmailCode = async (e?: React.FormEvent) => {
     e?.preventDefault()
     if (!email.trim()) return setError('Введи email')
     setError(''); setLoading(true)
@@ -121,79 +113,117 @@ export default function Auth() {
       const resp = await authAPI.sendCode(email.trim().toLowerCase())
       setIsNew(resp.data.is_new)
       setStep('code')
-      setCode(['', '', '', '', '', ''])
+      setEmailCode(['', '', '', '', '', ''])
       setResendTimer(60)
-      setTimeout(() => inputRefs.current[0]?.focus(), 100)
+      setTimeout(() => emailInputRefs.current[0]?.focus(), 100)
     } catch (err: any) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Не удалось отправить код')
+      setError(err?.response?.data?.detail || 'Не удалось отправить код')
     } finally { setLoading(false) }
   }
 
-  const handleCodeInput = (i: number, val: string) => {
-    const digit = val.replace(/\D/g, '').slice(-1)
-    const next = [...code]
-    next[i] = digit
-    setCode(next)
-    setError('')
-    if (digit && i < 5) inputRefs.current[i + 1]?.focus()
-    if (next.every(d => d)) setTimeout(() => verifyCode(next.join('')), 50)
-  }
-
-  const handleCodeKeyDown = (i: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !code[i] && i > 0) inputRefs.current[i - 1]?.focus()
-  }
-
-  const handleCodePaste = (e: React.ClipboardEvent) => {
-    const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
-    if (text.length === 6) {
-      setCode(text.split(''))
-      inputRefs.current[5]?.focus()
-      setTimeout(() => verifyCode(text), 50)
-    }
-  }
-
-  const verifyCode = async (codeStr?: string) => {
-    const fullCode = codeStr || code.join('')
+  const verifyEmailCode = async (codeStr?: string) => {
+    const fullCode = codeStr || emailCode.join('')
     if (fullCode.length !== 6) return setError('Введи 6-значный код')
     if (isNew && !firstName.trim()) return setError('Введи своё имя')
     setError(''); setLoading(true)
     try {
       const resp = await authAPI.verifyCode(email, fullCode, isNew ? firstName.trim() : undefined)
-      const { access_token, user } = resp.data
-      localStorage.setItem('poker_token', access_token)
-      localStorage.setItem('poker_user', JSON.stringify(user))
-      window.location.href = '/app/trainer'
+      saveAndRedirect(resp.data.access_token, resp.data.user)
     } catch (err: any) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Неверный код')
-      setCode(['', '', '', '', '', ''])
-      setTimeout(() => inputRefs.current[0]?.focus(), 50)
+      setError(err?.response?.data?.detail || 'Неверный код')
+      setEmailCode(['', '', '', '', '', ''])
+      setTimeout(() => emailInputRefs.current[0]?.focus(), 50)
     } finally { setLoading(false) }
   }
 
-  const hasSocial = socialCfg && (socialCfg.google_enabled || socialCfg.telegram_bot_username)
+  const emailHandlers = makeCodeHandlers(emailCode, setEmailCode, emailInputRefs, verifyEmailCode)
+
+  // ── Telegram OTP ───────────────────────────────────────────────────────────
+
+  const startTelegramLogin = async () => {
+    setError(''); setLoading(true)
+    try {
+      const resp = await authAPI.telegramInit()
+      const { session_token, bot_username } = resp.data
+      setTgSessionToken(session_token)
+      setTgBotUsername(bot_username)
+      setStep('telegram')
+      setTgCode(['', '', '', '', '', ''])
+      window.open(`https://t.me/${bot_username}?start=login_${session_token}`, '_blank')
+      setTimeout(() => tgInputRefs.current[0]?.focus(), 300)
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Не удалось начать вход через Telegram')
+    } finally { setLoading(false) }
+  }
+
+  const verifyTgCode = async (codeStr?: string) => {
+    const fullCode = codeStr || tgCode.join('')
+    if (fullCode.length !== 6) return setError('Введи 6-значный код из бота')
+    setError(''); setLoading(true)
+    try {
+      const resp = await authAPI.telegramVerify(tgSessionToken, fullCode)
+      saveAndRedirect(resp.data.access_token, resp.data.user)
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Неверный код')
+      setTgCode(['', '', '', '', '', ''])
+      setTimeout(() => tgInputRefs.current[0]?.focus(), 50)
+    } finally { setLoading(false) }
+  }
+
+  const tgHandlers = makeCodeHandlers(tgCode, setTgCode, tgInputRefs, verifyTgCode)
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
+
+  const CodeInputRow = ({
+    code, handlers, refs,
+  }: {
+    code: string[]
+    handlers: ReturnType<typeof makeCodeHandlers>
+    refs: React.MutableRefObject<(HTMLInputElement | null)[]>
+  }) => (
+    <div className="flex gap-2 justify-center" onPaste={handlers.onPaste}>
+      {code.map((digit, i) => (
+        <input key={i} ref={el => { refs.current[i] = el }}
+          type="text" inputMode="numeric" maxLength={1} value={digit}
+          onChange={e => handlers.onInput(i, e.target.value)}
+          onKeyDown={e => handlers.onKeyDown(i, e)}
+          className="w-11 h-14 text-center text-2xl font-bold rounded-xl outline-none transition-all"
+          style={{
+            background: digit ? '#1a3a1a' : '#0d1d0d',
+            border: `1px solid ${digit ? '#4ade80' : '#1a3a1a'}`,
+            color: '#f59e0b',
+          }}
+          onFocus={e => (e.target.style.borderColor = 'rgba(74,222,128,0.6)')}
+          onBlur={e => (e.target.style.borderColor = digit ? '#4ade80' : '#1a3a1a')} />
+      ))}
+    </div>
+  )
+
+  const goBack = () => {
+    if (step === 'code') { setStep('email'); setEmailCode(['','','','','','']) }
+    else if (step === 'telegram') { setStep('email'); setTgCode(['','','','','','']) }
+    else navigate('/')
+    setError('')
+  }
+
+  const hasSocial = googleEnabled || telegramEnabled
+
+  // ── JSX ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4" style={{ background: '#070e07' }}>
       <motion.div className="fixed top-1/4 left-1/4 text-9xl select-none pointer-events-none"
         style={{ color: 'rgba(245,158,11,0.03)' }}
-        animate={{ rotate: [0, 5, -5, 0] }} transition={{ duration: 8, repeat: Infinity }}>
-        ♠
-      </motion.div>
+        animate={{ rotate: [0, 5, -5, 0] }} transition={{ duration: 8, repeat: Infinity }}>♠</motion.div>
       <motion.div className="fixed bottom-1/4 right-1/4 text-9xl select-none pointer-events-none"
         style={{ color: 'rgba(245,158,11,0.03)' }}
-        animate={{ rotate: [0, -5, 5, 0] }} transition={{ duration: 10, repeat: Infinity, delay: 1 }}>
-        ♣
-      </motion.div>
+        animate={{ rotate: [0, -5, 5, 0] }} transition={{ duration: 10, repeat: Infinity, delay: 1 }}>♣</motion.div>
 
       <div className="relative z-10 w-full max-w-sm">
-        <button
-          onClick={() => step === 'code' ? (setStep('email'), setCode(['','','','','',''])) : navigate('/')}
-          className="flex items-center gap-2 text-sm mb-8 transition-colors"
+        <button onClick={goBack} className="flex items-center gap-2 text-sm mb-8 transition-colors"
           style={{ color: '#4a8a4a' }}>
           <ArrowLeft className="w-4 h-4" />
-          {step === 'code' ? 'Другой email' : 'На главную'}
+          {step !== 'email' ? 'Назад' : 'На главную'}
         </button>
 
         <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
@@ -210,15 +240,15 @@ export default function Auth() {
           </div>
 
           <AnimatePresence mode="wait">
-            {step === 'email' ? (
-              <motion.div key="email" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 16 }} transition={{ duration: 0.2 }}
-                className="space-y-4">
 
-                {/* Social login buttons */}
+            {/* ── Step: email ── */}
+            {step === 'email' && (
+              <motion.div key="email" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 16 }} transition={{ duration: 0.2 }} className="space-y-3">
+
                 {hasSocial && (
-                  <div className="space-y-3">
-                    {socialCfg?.google_enabled && (
+                  <>
+                    {googleEnabled && (
                       <a href="/api/auth/google"
                         className="flex items-center justify-center gap-3 w-full py-3 rounded-xl text-sm font-medium transition-all"
                         style={{ background: '#0d1d0d', border: '1px solid #1a3a1a', color: '#e5f5e5' }}
@@ -234,56 +264,57 @@ export default function Auth() {
                       </a>
                     )}
 
-                    {socialCfg?.telegram_bot_username && !loading && (
-                      <TelegramButton
-                        botUsername={socialCfg.telegram_bot_username}
-                        onAuth={data => handleSocialLogin(data, 'telegram')}
-                      />
+                    {telegramEnabled && (
+                      <button onClick={startTelegramLogin} disabled={loading}
+                        className="flex items-center justify-center gap-3 w-full py-3 rounded-xl text-sm font-medium transition-all"
+                        style={{ background: '#0d1d0d', border: '1px solid #1a3a1a', color: '#e5f5e5', opacity: loading ? 0.6 : 1 }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(74,222,128,0.4)')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = '#1a3a1a')}>
+                        {loading
+                          ? <Loader className="w-5 h-5 animate-spin" />
+                          : <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                              <circle cx="12" cy="12" r="12" fill="#229ED9"/>
+                              <path d="M5.5 11.5L17 7l-3 10-2.5-3.5L5.5 11.5z" fill="white" stroke="white" strokeWidth="0.5" strokeLinejoin="round"/>
+                              <path d="M11.5 13.5L14 11" stroke="white" strokeWidth="0.8"/>
+                            </svg>
+                        }
+                        Войти через Telegram
+                      </button>
                     )}
 
-                    {hasSocial && (
-                      <div className="flex items-center gap-3 my-2">
-                        <div className="flex-1 h-px" style={{ background: '#1a3a1a' }} />
-                        <span className="text-xs" style={{ color: '#2d5a2d' }}>или войди по email</span>
-                        <div className="flex-1 h-px" style={{ background: '#1a3a1a' }} />
-                      </div>
-                    )}
-                  </div>
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="flex-1 h-px" style={{ background: '#1a3a1a' }} />
+                      <span className="text-xs" style={{ color: '#2d5a2d' }}>или по email</span>
+                      <div className="flex-1 h-px" style={{ background: '#1a3a1a' }} />
+                    </div>
+                  </>
                 )}
 
-                <form onSubmit={sendCode} className="space-y-4">
+                <form onSubmit={sendEmailCode} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#4a8a4a' }}>
-                      Email
-                    </label>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#4a8a4a' }}>Email</label>
                     <input type="email" value={email}
                       onChange={e => { setEmail(e.target.value); setError('') }}
-                      placeholder="poker@example.com" required autoFocus={!hasSocial}
+                      placeholder="poker@example.com" required
                       className="w-full rounded-xl px-4 py-3 text-sm outline-none"
                       style={{ background: '#0d1d0d', border: '1px solid #1a3a1a', color: '#e5f5e5' }}
                       onFocus={e => (e.target.style.borderColor = 'rgba(74,222,128,0.4)')}
                       onBlur={e => (e.target.style.borderColor = '#1a3a1a')} />
                   </div>
-
-                  {error && (
-                    <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                      className="text-red-400 text-sm">{error}</motion.p>
-                  )}
-
+                  {error && <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm">{error}</motion.p>}
                   <button type="submit" disabled={loading || !email.trim()}
                     className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all text-white"
                     style={{ background: '#15803d', opacity: loading || !email.trim() ? 0.5 : 1 }}>
-                    {loading
-                      ? <><Loader className="w-4 h-4 animate-spin" />Отправляем...</>
-                      : <><Mail className="w-4 h-4" />Получить код</>}
+                    {loading ? <><Loader className="w-4 h-4 animate-spin" />Отправляем...</> : <><Mail className="w-4 h-4" />Получить код</>}
                   </button>
                 </form>
               </motion.div>
+            )}
 
-            ) : (
+            {/* ── Step: email code ── */}
+            {step === 'code' && (
               <motion.div key="code" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.2 }}
-                className="space-y-5">
+                exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.2 }} className="space-y-5">
 
                 <div className="text-center">
                   <p className="text-sm" style={{ color: '#4a8a4a' }}>Код отправлен на</p>
@@ -292,9 +323,7 @@ export default function Auth() {
 
                 {isNew && (
                   <div>
-                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#4a8a4a' }}>
-                      Твоё имя
-                    </label>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#4a8a4a' }}>Твоё имя</label>
                     <input type="text" value={firstName}
                       onChange={e => { setFirstName(e.target.value); setError('') }}
                       placeholder="Иван" autoFocus
@@ -306,40 +335,20 @@ export default function Auth() {
                 )}
 
                 <div>
-                  <label className="block text-xs font-medium mb-3 text-center" style={{ color: '#4a8a4a' }}>
-                    Введи код из письма
-                  </label>
-                  <div className="flex gap-2 justify-center" onPaste={handleCodePaste}>
-                    {code.map((digit, i) => (
-                      <input key={i} ref={el => { inputRefs.current[i] = el }}
-                        type="text" inputMode="numeric" maxLength={1} value={digit}
-                        onChange={e => handleCodeInput(i, e.target.value)}
-                        onKeyDown={e => handleCodeKeyDown(i, e)}
-                        className="w-11 h-14 text-center text-2xl font-bold rounded-xl outline-none transition-all"
-                        style={{
-                          background: digit ? '#1a3a1a' : '#0d1d0d',
-                          border: `1px solid ${digit ? '#4ade80' : '#1a3a1a'}`,
-                          color: '#f59e0b',
-                        }}
-                        onFocus={e => (e.target.style.borderColor = 'rgba(74,222,128,0.6)')}
-                        onBlur={e => (e.target.style.borderColor = digit ? '#4ade80' : '#1a3a1a')} />
-                    ))}
-                  </div>
+                  <label className="block text-xs font-medium mb-3 text-center" style={{ color: '#4a8a4a' }}>Введи код из письма</label>
+                  <CodeInputRow code={emailCode} handlers={emailHandlers} refs={emailInputRefs} />
                 </div>
 
-                {error && (
-                  <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                    className="text-red-400 text-sm text-center">{error}</motion.p>
-                )}
+                {error && <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm text-center">{error}</motion.p>}
 
-                <button onClick={() => verifyCode()}
-                  disabled={loading || code.join('').length !== 6 || (isNew && !firstName.trim())}
+                <button onClick={() => verifyEmailCode()}
+                  disabled={loading || emailCode.join('').length !== 6 || (isNew && !firstName.trim())}
                   className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 text-white transition-all"
-                  style={{ background: '#15803d', opacity: loading || code.join('').length !== 6 ? 0.5 : 1 }}>
+                  style={{ background: '#15803d', opacity: loading || emailCode.join('').length !== 6 ? 0.5 : 1 }}>
                   {loading ? <><Loader className="w-4 h-4 animate-spin" />Проверяем...</> : 'Войти'}
                 </button>
 
-                <button onClick={() => { if (resendTimer === 0) sendCode() }}
+                <button onClick={() => { if (resendTimer === 0) sendEmailCode() }}
                   disabled={resendTimer > 0 || loading}
                   className="w-full py-2 text-sm flex items-center justify-center gap-1.5 transition-colors"
                   style={{ color: resendTimer > 0 ? '#2d5a2d' : '#4a8a4a' }}>
@@ -348,6 +357,50 @@ export default function Auth() {
                 </button>
               </motion.div>
             )}
+
+            {/* ── Step: telegram code ── */}
+            {step === 'telegram' && (
+              <motion.div key="telegram" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.2 }} className="space-y-5">
+
+                <div className="text-center space-y-3">
+                  <div className="rounded-xl p-4 text-sm" style={{ background: '#0d1d0d', border: '1px solid #1a3a1a' }}>
+                    <p style={{ color: '#4a8a4a' }}>1. Нажми кнопку ниже</p>
+                    <p style={{ color: '#4a8a4a' }}>2. В боте нажми <b className="text-green-400">Старт</b></p>
+                    <p style={{ color: '#4a8a4a' }}>3. Скопируй код и введи здесь</p>
+                  </div>
+                  <a href={`https://t.me/${tgBotUsername}?start=login_${tgSessionToken}`}
+                    target="_blank" rel="noreferrer"
+                    className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold text-white"
+                    style={{ background: '#229ED9' }}>
+                    <Send className="w-4 h-4" />
+                    Открыть @{tgBotUsername}
+                  </a>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium mb-3 text-center" style={{ color: '#4a8a4a' }}>Код из бота</label>
+                  <CodeInputRow code={tgCode} handlers={tgHandlers} refs={tgInputRefs} />
+                </div>
+
+                {error && <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm text-center">{error}</motion.p>}
+
+                <button onClick={() => verifyTgCode()}
+                  disabled={loading || tgCode.join('').length !== 6}
+                  className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 text-white transition-all"
+                  style={{ background: '#15803d', opacity: loading || tgCode.join('').length !== 6 ? 0.5 : 1 }}>
+                  {loading ? <><Loader className="w-4 h-4 animate-spin" />Проверяем...</> : 'Войти'}
+                </button>
+
+                <button onClick={startTelegramLogin} disabled={loading}
+                  className="w-full py-2 text-sm flex items-center justify-center gap-1.5"
+                  style={{ color: '#4a8a4a' }}>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Запросить новый код
+                </button>
+              </motion.div>
+            )}
+
           </AnimatePresence>
         </motion.div>
       </div>

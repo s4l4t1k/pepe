@@ -125,8 +125,10 @@ export const authAPI = {
     client.post<{ ok: boolean; is_new: boolean }>('/auth/send-code', { email }),
   verifyCode: (email: string, code: string, first_name?: string) =>
     client.post('/auth/verify-code', { email, code, first_name }),
-  telegramAuth: (data: Record<string, string | number>) =>
-    client.post('/auth/telegram', data),
+  telegramInit: () =>
+    client.post<{ session_token: string; bot_username: string }>('/auth/telegram/init', {}),
+  telegramVerify: (session_token: string, code: string) =>
+    client.post('/auth/telegram/verify', { session_token, code }),
   socialConfig: () =>
     client.get<SocialConfig>('/auth/social-config'),
   // Legacy

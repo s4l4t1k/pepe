@@ -33,6 +33,10 @@ from core.database import (
     set_otp,
     get_otp_user,
     clear_otp,
+    create_telegram_login_session,
+    get_telegram_login_session,
+    complete_telegram_login_session,
+    delete_telegram_login_session,
 )
 from core.email import send_otp_email
 
@@ -318,69 +322,72 @@ async def google_callback(
     return RedirectResponse(f"/auth?token={jwt_token}")
 
 
-# ── Telegram Login ─────────────────────────────────────────────────────────────
+# ── Telegram Bot OTP Login ─────────────────────────────────────────────────────
 
-class TelegramAuthRequest(BaseModel):
-    id: int
-    first_name: str
-    last_name: Optional[str] = None
-    username: Optional[str] = None
-    photo_url: Optional[str] = None
-    auth_date: int
-    hash: str
+import secrets as _secrets
 
 
-@router.post("/telegram", response_model=TokenResponse)
-async def telegram_auth(
-    req: TelegramAuthRequest,
-    session: AsyncSession = Depends(get_session),
-) -> TokenResponse:
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not bot_token:
+@router.post("/telegram/init")
+async def telegram_init(session: AsyncSession = Depends(get_session)):
+    """Create a Telegram login session. Returns session_token + bot_username."""
+    bot_username = os.getenv("TELEGRAM_BOT_USERNAME", "")
+    if not bot_username:
         raise HTTPException(status_code=503, detail="Telegram auth не настроен на сервере")
 
-    # Verify HMAC hash per Telegram docs
-    fields = {
-        "auth_date": str(req.auth_date),
-        "first_name": req.first_name,
-        "id": str(req.id),
-    }
-    if req.last_name:
-        fields["last_name"] = req.last_name
-    if req.photo_url:
-        fields["photo_url"] = req.photo_url
-    if req.username:
-        fields["username"] = req.username
+    session_token = _secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+    await create_telegram_login_session(session, session_token, expires_at)
 
-    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
-    secret_key = hashlib.sha256(bot_token.encode()).digest()
-    expected_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    return {"session_token": session_token, "bot_username": bot_username}
 
-    if not hmac.compare_digest(expected_hash, req.hash):
-        raise HTTPException(status_code=401, detail="Неверная подпись Telegram")
 
-    # Freshness check (24 hours)
-    if abs(int(time.time()) - req.auth_date) > 86400:
-        raise HTTPException(status_code=401, detail="Устаревшие данные авторизации. Попробуй снова")
+class TelegramVerifyRequest(BaseModel):
+    session_token: str
+    code: str
 
-    # Find or create user
-    user = await get_web_user_by_telegram_id(session, req.id)
-    if not user:
-        name = req.first_name
-        if req.last_name:
-            name = f"{req.first_name} {req.last_name}"
-        tg_email = f"tg_{req.id}@telegram.user"
-        user = await get_web_user_by_email(session, tg_email)
-        if not user:
-            user = await create_web_user(session, email=tg_email, first_name=name, telegram_id=req.id)
+
+@router.post("/telegram/verify", response_model=TokenResponse)
+async def telegram_verify(
+    req: TelegramVerifyRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TokenResponse:
+    """Verify Telegram OTP code from bot, return JWT."""
+    tg_session = await get_telegram_login_session(session, req.session_token)
+
+    if not tg_session:
+        raise HTTPException(status_code=400, detail="Сессия не найдена. Попробуй снова")
+
+    if datetime.utcnow() > tg_session.expires_at:
+        raise HTTPException(status_code=400, detail="Сессия истекла. Нажми «Войти через Telegram» снова")
+
+    if not tg_session.otp_code:
+        raise HTTPException(status_code=400, detail="Бот ещё не прислал код. Открой бота и нажми Старт")
+
+    if tg_session.otp_code != req.code.strip():
+        raise HTTPException(status_code=400, detail="Неверный код")
+
+    tg_id = tg_session.telegram_id
+    first_name = tg_session.telegram_first_name or "Игрок"
+
+    # Find or create WebUser
+    web_user = await get_web_user_by_telegram_id(session, tg_id)
+    if not web_user:
+        tg_email = f"tg_{tg_id}@telegram.user"
+        web_user = await get_web_user_by_email(session, tg_email)
+        if not web_user:
+            web_user = await create_web_user(
+                session, email=tg_email, first_name=first_name, telegram_id=tg_id
+            )
         else:
-            user.telegram_id = req.id
-            if not user.first_name:
-                user.first_name = name
+            web_user.telegram_id = tg_id
+            if not web_user.first_name:
+                web_user.first_name = first_name
             await session.commit()
 
-    token = create_access_token(user.id)
-    return TokenResponse(access_token=token, user=_user_out(user))
+    await delete_telegram_login_session(session, req.session_token)
+
+    token = create_access_token(web_user.id)
+    return TokenResponse(access_token=token, user=_user_out(web_user))
 
 
 # ── Legacy password endpoints ─────────────────────────────────────────────────

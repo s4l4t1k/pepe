@@ -98,6 +98,20 @@ class Opponent(Base):
     web_user = relationship("WebUser", back_populates="opponents", foreign_keys=[web_user_id])
 
 
+class TelegramLoginSession(Base):
+    """Temporary session for web login via Telegram bot OTP."""
+    __tablename__ = "telegram_login_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_token = Column(String(64), unique=True, index=True, nullable=False)
+    otp_code = Column(String(6), nullable=True)
+    telegram_id = Column(BigInteger, nullable=True)
+    telegram_first_name = Column(String(255), nullable=True)
+    telegram_username = Column(String(255), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class TrainingProgress(Base):
     __tablename__ = "training_progress"
 
@@ -647,3 +661,57 @@ async def delete_opponent(
     await session.delete(opponent)
     await session.commit()
     return True
+
+
+# ── TelegramLoginSession helpers ──────────────────────────────────────────────
+
+async def create_telegram_login_session(
+    session: AsyncSession,
+    session_token: str,
+    expires_at: datetime,
+) -> TelegramLoginSession:
+    obj = TelegramLoginSession(session_token=session_token, expires_at=expires_at)
+    session.add(obj)
+    await session.commit()
+    await session.refresh(obj)
+    return obj
+
+
+async def get_telegram_login_session(
+    session: AsyncSession,
+    session_token: str,
+) -> Optional[TelegramLoginSession]:
+    result = await session.execute(
+        select(TelegramLoginSession).where(TelegramLoginSession.session_token == session_token)
+    )
+    return result.scalar_one_or_none()
+
+
+async def complete_telegram_login_session(
+    session: AsyncSession,
+    session_token: str,
+    otp_code: str,
+    telegram_id: int,
+    first_name: str,
+    username: Optional[str],
+) -> Optional[TelegramLoginSession]:
+    obj = await get_telegram_login_session(session, session_token)
+    if not obj:
+        return None
+    obj.otp_code = otp_code
+    obj.telegram_id = telegram_id
+    obj.telegram_first_name = first_name
+    obj.telegram_username = username
+    await session.commit()
+    await session.refresh(obj)
+    return obj
+
+
+async def delete_telegram_login_session(
+    session: AsyncSession,
+    session_token: str,
+) -> None:
+    obj = await get_telegram_login_session(session, session_token)
+    if obj:
+        await session.delete(obj)
+        await session.commit()
